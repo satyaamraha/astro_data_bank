@@ -80,7 +80,7 @@ describe('at-rest vault', () => {
   });
 
   it('changes the passphrase without re-encrypting records', () => {
-    const { vault, wrapped } = createVault(passphrase);
+    const { vault } = createVault(passphrase);
     const stored = encryptRecord(vault, 'msg:1', text.encode('durable'));
 
     const newPassphrase = utf8.encode('a completely different passphrase');
@@ -91,7 +91,6 @@ describe('at-rest vault', () => {
     // New one does, and existing records still decrypt.
     const reopened = unlockVault(newPassphrase, rewrapped);
     expect(decryptRecord(reopened, 'msg:1', stored)).toEqual(text.encode('durable'));
-    void wrapped;
   });
 
   it('wipes the data key on lock', () => {

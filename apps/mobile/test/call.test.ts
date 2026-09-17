@@ -316,7 +316,7 @@ describe('call teardown', () => {
   });
 
   it('declines a second call instead of disturbing the live one', async () => {
-    const { alice, bob, bobAddress, aliceAddress } = pair();
+    const { alice, bob, bobAddress } = pair();
     await alice.placeCall(bobAddress);
     await bob.answerCall();
     const liveCallId = bob.activeCall!.callId;
@@ -330,7 +330,6 @@ describe('call teardown', () => {
     });
     expect(bob.activeCall!.callId).toBe(liveCallId);
     expect(bob.activeCall!.state).not.toBe('ringing-incoming');
-    void aliceAddress;
   });
 
   it('ignores signalling for an unknown call', async () => {

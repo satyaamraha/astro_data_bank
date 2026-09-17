@@ -108,7 +108,6 @@ describe('double ratchet', () => {
     // us derive millions of keys: a trivial CPU and memory exhaustion attack.
     const { alice, bob } = connectedPair();
     const session = bob.sessions.get(alice.address)!;
-    const envelope = alice.send(bob.address, 'x');
 
     // Re-encrypt with a header far ahead of the real counter.
     const aliceSession = alice.sessions.get(bob.address)!;
@@ -118,7 +117,6 @@ describe('double ratchet', () => {
       ciphertext: message.ciphertext,
     };
     expect(() => ratchetDecrypt(session.ratchet, forged)).toThrow(SessionStateError);
-    void envelope;
   });
 
   it('bounds the skipped-key cache', () => {

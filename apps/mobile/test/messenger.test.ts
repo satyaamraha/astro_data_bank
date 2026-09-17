@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { IdentityChangedError, formatSafetyNumber } from '@veil/crypto';
-import type { Message, Payload } from '../src/core/types.js';
 import { createUser, withRelay } from './harness.js';
 
 describe('messaging end to end', () => {
@@ -270,13 +269,9 @@ describe('identity verification', () => {
 describe('metadata minimisation', () => {
   it('does not send receipts by default', async () => {
     await withRelay(async (relay) => {
-      const received: Payload[] = [];
-      const alice = await createUser(relay, 'alice', {
-        events: { onCallPayload: (_, payload) => received.push(payload) },
-      });
+      const alice = await createUser(relay, 'alice');
       const bob = await createUser(relay, 'bob');
 
-      const updates: Message[] = [];
       await alice.messenger.sendText(bob.address, 'no receipt please');
       await bob.messenger.sync(); // would send a receipt if enabled
       await alice.messenger.sync();
@@ -286,8 +281,6 @@ describe('metadata minimisation', () => {
       // confirm presence, so they are opt-in.
       const history = await alice.messenger.history(bob.address);
       expect(history[0]!.status).toBe('sent');
-      void updates;
-      void received;
     });
   });
 

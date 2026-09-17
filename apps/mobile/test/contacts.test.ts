@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { UntrustedBundleError } from '@veil/crypto';
+import { MalformedInputError } from '@veil/crypto';
 import { chunkCode, groupSafetyNumber, looksLikeCode, relativeTime } from '../src/core/display.js';
 import { createUser, withRelay } from './harness.js';
 
@@ -92,8 +92,11 @@ describe('starting a conversation from a verification code', () => {
   it('rejects a code that is not a Veil code at all', async () => {
     await withRelay(async (relay) => {
       const alice = await createUser(relay, 'alice');
-      await expect(alice.messenger.addContactFromCode('bm90LWEtdmVpbC1jb2Rl')).rejects.toThrow();
-      void UntrustedBundleError;
+      // Not a Veil code at all: rejected on the magic-tag check, before any
+      // signature work.
+      await expect(
+        alice.messenger.addContactFromCode('bm90LWEtdmVpbC1jb2Rl'),
+      ).rejects.toThrow(MalformedInputError);
     });
   });
 });
