@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build workspace packages
+        run: npm run build
+
+      - name: Typecheck (strict)
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      # The crypto core and the relay are the trust path. An advisory there is
+      # a blocker, so this step must fail the build. The mobile app's Expo
+      # build tooling carries known advisories that are documented in
+      # docs/SECURITY.md and are not in the trust path, so it is not gated here.
+      - name: Audit the trust path
+        run: |
+          npm audit --workspace @veil/crypto --audit-level=low
+          npm audit --workspace @veil/relay --audit-level=low
