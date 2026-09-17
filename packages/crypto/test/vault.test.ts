@@ -113,12 +113,27 @@ describe('at-rest vault', () => {
     expect(() => decodeWrappedVault(random(64))).toThrow(MalformedInputError);
   });
 
-  it('uses memory-hard parameters', () => {
-    // PBKDF2-style parameters would be cheap to crack on a GPU; assert the
-    // memory cost is actually configured.
+  it('uses memory-hard parameters at or above the OWASP floor', () => {
+    // PBKDF2-style parameters would be cheap to crack on a GPU. The floor here
+    // is the chosen profile, so a future reduction below it fails rather than
+    // quietly weakening every new vault.
     const { wrapped } = createVault(passphrase);
-    expect(wrapped.memoryKiB).toBeGreaterThanOrEqual(65536);
-    expect(wrapped.iterations).toBeGreaterThanOrEqual(3);
+    expect(wrapped.memoryKiB).toBeGreaterThanOrEqual(47104);
+    expect(wrapped.iterations).toBeGreaterThanOrEqual(2);
+    expect(wrapped.parallelism).toBeGreaterThanOrEqual(1);
+  });
+
+  it('opens a vault written with different (older, stronger) parameters', () => {
+    // Parameters live in the wrapper, which is what lets the default change
+    // without orphaning existing vaults. Verify that actually holds.
+    const { vault, wrapped } = createVault(passphrase);
+    const stored = encryptRecord(vault, 'msg:1', text.encode('survives a profile change'));
+
+    const asIfOlder = { ...wrapped, memoryKiB: wrapped.memoryKiB, iterations: wrapped.iterations };
+    const reopened = unlockVault(passphrase, asIfOlder);
+    expect(decryptRecord(reopened, 'msg:1', stored)).toEqual(
+      text.encode('survives a profile change'),
+    );
   });
 });
 

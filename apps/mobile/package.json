@@ -22,7 +22,10 @@
     "react": "19.3.0",
     "react-native": "0.87.1",
     "react-native-get-random-values": "^1.11.0",
-    "react-native-webrtc": "^124.0.8"
+    "react-native-webrtc": "^124.0.8",
+    "expo-screen-capture": "^57.0.3",
+    "expo-build-properties": "^57.0.20",
+    "expo-system-ui": "^57.0.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -6,36 +6,70 @@
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0B0E13",
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "app.veil.messenger",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Veil needs the microphone for encrypted voice calls. Audio never leaves your device unencrypted.",
         "ITSAppUsesNonExemptEncryption": true,
-        "UIBackgroundModes": ["voip", "audio"],
+        "UIBackgroundModes": [
+          "voip",
+          "audio"
+        ],
         "NSAllowsArbitraryLoads": false
       }
     },
     "android": {
       "package": "app.veil.messenger",
+      "versionCode": 1,
+      "allowBackup": false,
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.RECORD_AUDIO",
         "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.FOREGROUND_SERVICE"
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.POST_NOTIFICATIONS"
       ],
       "blockedPermissions": [
         "android.permission.READ_CONTACTS",
         "android.permission.READ_PHONE_STATE",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION"
-      ],
-      "allowBackup": false
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ]
     },
-    "plugins": ["expo-secure-store", "expo-sqlite"],
+    "plugins": [
+      "expo-secure-store",
+      "expo-sqlite",
+      "expo-system-ui",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36,
+            "minSdkVersion": 26,
+            "enableProguardInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "usesCleartextTraffic": false
+          }
+        }
+      ],
+      "./plugins/withAndroidPrivacy.js",
+      "./plugins/withProguardRules.js"
+    ],
     "extra": {
-      "privacyNotes": "No analytics, no crash reporting, no advertising identifiers. allowBackup is false on Android so the encrypted database is not copied into Google's backup service."
+      "privacyNotes": "No analytics, no crash reporting, no advertising identifiers. Android Backup and device transfer are disabled so the encrypted database never leaves the device. Over-the-air JS updates are off so the running code is the code that was signed and reviewed."
+    },
+    "updates": {
+      "enabled": false
     }
   }
 }

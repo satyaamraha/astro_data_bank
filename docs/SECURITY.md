@@ -132,12 +132,24 @@ other at the cost of exposing them both to the TURN operator, plus latency.
 
 ### 3.5 A short passphrase is still weak
 
-Argon2id at 64 MiB and 3 passes makes each guess expensive, but a six-character
-passphrase is guessable regardless of the KDF. The app enforces a ten-character
-minimum, which is a floor rather than a recommendation. Binding the data key to
-hardware-backed key material, so that extraction requires the device and not
-just the file, is the correct additional defence and is noted below as
-outstanding.
+Argon2id at 46 MiB and 2 passes makes each guess expensive, but a
+six-character passphrase is guessable regardless of the KDF. The app enforces a
+ten-character minimum, which is a floor rather than a recommendation. Binding
+the data key to hardware-backed key material, so that extraction requires the
+device and not just the file, is the correct additional defence and is noted
+below as outstanding.
+
+The parameters were chosen against measurement, not guessed. On a 2.8 GHz x86
+core under V8 this implementation takes ~780 ms at 46 MiB / t=2 and ~1620 ms at
+64 MiB / t=3; Hermes on a mid-range phone is a small multiple slower again. An
+earlier revision of this document claimed 64 MiB / t=3 cost "roughly 100-300 ms
+on a mid-range phone", which was wrong by an order of magnitude. Several
+seconds of blocked UI at unlock risks an Android ANR, and an unlock that feels
+broken gets "fixed" by cutting the parameters to something far weaker or by
+users choosing short passphrases - both worse than the memory the stronger
+profile buys. 46 MiB / t=2 is one of the two profiles OWASP documents for
+Argon2id. Parameters are stored in each vault's wrapper, so the default can be
+raised as phones get faster without orphaning existing vaults.
 
 ### 3.6 Memory hygiene is best-effort
 
@@ -166,7 +178,7 @@ undecryptable.
 
 ### 3.9 This code has not been independently audited
 
-It is a careful implementation of well-specified constructions with 211 tests
+It is a careful implementation of well-specified constructions with 254 tests
 covering the security claims, including negative tests for key substitution,
 forged senders, replays, tampering, and resource exhaustion. That is not the
 same as an audit. Do not deploy it for people whose safety depends on it without
@@ -196,7 +208,7 @@ over with config that does not work.
 | Post-quantum KEM | ML-KEM-1024 | FIPS 203; highest parameter set |
 | AEAD | XChaCha20-Poly1305 | 24-byte nonces make random nonces safe; no AES timing concerns without AES-NI |
 | Hash / KDF | SHA-512 / HKDF-SHA-512 | Wide margin; fast on 64-bit mobile cores |
-| Passphrase KDF | Argon2id | Memory-hard; PBKDF2 parallelises almost for free |
+| Passphrase KDF | Argon2id (46 MiB, t=2, p=1) | Memory-hard; PBKDF2 parallelises almost for free |
 
 All primitives come from the audited `@noble/*` libraries. `primitives.ts` is
 the only file that imports them, so the algorithm choices are reviewable in one

@@ -35,3 +35,17 @@ jobs:
         run: |
           npm audit --workspace @veil/crypto --audit-level=low
           npm audit --workspace @veil/relay --audit-level=low
+
+      # The Android hardening lives in config plugins, and `expo prebuild`
+      # regenerates the native project from them. Regenerating here and
+      # re-running the config tests proves the committed android/ directory
+      # still matches what the plugins produce - otherwise a hand-edit could
+      # pass CI while the next prebuild on someone else's machine silently
+      # dropped the hardening.
+      - name: Verify Android hardening is reproducible
+        working-directory: apps/mobile
+        run: |
+          npx expo prebuild --platform android --clean --no-install
+          npx vitest run androidConfig
+          git diff --exit-code -- android \
+            || (echo "::error::android/ differs from plugin output; commit the regenerated project" && exit 1)

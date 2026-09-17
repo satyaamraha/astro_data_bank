@@ -339,7 +339,7 @@ a key binding or a sender proof — the same identity key serves all three.
 ## 8. At-rest storage
 
 ```
-KEK = KDF( Argon2id(passphrase, salt, m=64MiB, t=3, p=1, 32),
+KEK = KDF( Argon2id(passphrase, salt, m=46MiB, t=2, p=1, 32),
            salt, "Veil/v1/VaultKEK", 32 )
 DEK = random(32)                        -- wrapped under KEK
 record_key = KDF(DEK, record_id, "Veil/v1/VaultRecord", 32)

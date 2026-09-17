@@ -17,6 +17,7 @@ import { StatusBar } from 'expo-status-bar';
 import {
   createVault,
   decodeWrappedVault,
+  destroySession,
   encodeWrappedVault,
   lockVault,
   unlockVault,
@@ -25,9 +26,14 @@ import {
   type Vault,
 } from '@veil/crypto';
 import { assertSecureRandomAvailable } from './platform/random.js';
-import { KeystoreSecretStore } from './platform/secureStore.js';
+import {
+  KeystoreSecretStore,
+  readEitherMode,
+  type KeystoreMode,
+} from './platform/secureStore.js';
 import { SqliteDatabase } from './platform/database.js';
 import { FetchTransport, WebSocketTransport } from './platform/transport.js';
+import { preventScreenCapture, startLifecycleLock } from './platform/screenSecurity.js';
 import { WebRtcMediaEngine, type IceConfiguration } from './platform/webrtc.js';
 import { Messenger } from './core/messenger.js';
 import { RelayClient } from './core/relayClient.js';
@@ -78,6 +84,10 @@ export function App({ config }: { config: AppConfig }) {
   const [call, setCall] = useState<CallInfo | undefined>();
   const [muted, setMuted] = useState(false);
   const [myAddress, setMyAddress] = useState('');
+  /** False when the platform refused to block screenshots; the UI must say so. */
+  const [screenProtected, setScreenProtected] = useState(true);
+  /** Which protection the keystore is actually giving us, not what we hoped for. */
+  const [keystoreMode, setKeystoreMode] = useState<KeystoreMode>('authenticated');
 
   const messengerRef = useRef<Messenger | undefined>(undefined);
   const callManagerRef = useRef<CallManager | undefined>(undefined);
@@ -108,11 +118,11 @@ export function App({ config }: { config: AppConfig }) {
     void (async () => {
       try {
         assertSecureRandomAvailable();
-        const secrets = new KeystoreSecretStore();
-        // A stored wrapper means this device already has an identity, so ask
-        // for the existing passphrase rather than offering to create a new one
-        // (which would orphan the old history).
-        const existing = await secrets.get(VAULT_KEY);
+        // Read through both keystore modes: an install predating
+        // authentication-bound storage has entries the stronger options cannot
+        // open, and treating that as "no identity" would offer to create a new
+        // one and orphan the user's history.
+        const existing = await readEitherMode(VAULT_KEY);
         setRoute({ name: 'onboarding', mode: existing ? 'unlock' : 'create' });
       } catch (caught) {
         setError((caught as Error).message);
@@ -132,7 +142,8 @@ export function App({ config }: { config: AppConfig }) {
       setBusy(true);
       setError(undefined);
       try {
-        const secrets = new KeystoreSecretStore();
+        const secrets = await KeystoreSecretStore.open();
+        setKeystoreMode(secrets.mode);
         const database = await SqliteDatabase.open();
 
         const storedWrapper = await secrets.get(VAULT_KEY);
@@ -249,6 +260,56 @@ export function App({ config }: { config: AppConfig }) {
     },
     [],
   );
+
+  // Surface reduced protection rather than assuming the strong path worked.
+  const platformWarnings = [
+    screenProtected
+      ? undefined
+      : 'This device would not block screenshots, so other apps may be able to ' +
+        'capture your conversations.',
+    keystoreMode === 'authenticated'
+      ? undefined
+      : 'No device passcode is set, so your identity key is not protected by ' +
+        'screen lock. Set a passcode in Android settings.',
+  ].filter((warning): warning is string => warning !== undefined);
+  const screenWarning = platformWarnings.length > 0 ? platformWarnings.join(' ') : undefined;
+
+  /**
+   * Wipe the in-memory data key and drop back to the unlock screen.
+   *
+   * Called on background timeout and on teardown. Sessions are dropped too:
+   * their ratchet state is not persisted, so keeping them after a lock would
+   * leave key material in memory for no benefit.
+   */
+  const lock = useCallback(() => {
+    socketRef.current?.close();
+    socketRef.current = undefined;
+    const messenger = messengerRef.current;
+    if (messenger) {
+      for (const session of messenger.liveSessions()) destroySession(session);
+    }
+    messengerRef.current = undefined;
+    callManagerRef.current = undefined;
+    if (vaultRef.current) {
+      lockVault(vaultRef.current);
+      vaultRef.current = undefined;
+    }
+    setConversations([]);
+    setContacts(new Map());
+    setMessages([]);
+    setCall(undefined);
+    setError(undefined);
+    setRoute({ name: 'onboarding', mode: 'unlock' });
+  }, []);
+
+  // Block screenshots and the recents thumbnail as soon as the app starts,
+  // before any message can be on screen.
+  useEffect(() => {
+    void preventScreenCapture().then(setScreenProtected);
+  }, []);
+
+  // Lock the vault once the app has been backgrounded past the grace period.
+  useEffect(() => startLifecycleLock({ onLock: lock }), [lock]);
 
   const openChat = useCallback(async (address: string) => {
     const messenger = messengerRef.current;
@@ -457,6 +518,11 @@ export function App({ config }: { config: AppConfig }) {
         }}
         onShowMyCode={() => setRoute({ name: 'my-code' })}
       />
+      {screenWarning !== undefined ? (
+        <View style={styles.warningBar}>
+          <Text style={styles.errorText}>{screenWarning}</Text>
+        </View>
+      ) : null}
       {error !== undefined ? (
         <View style={styles.errorBar}>
           <Text style={styles.errorText}>{error}</Text>
@@ -513,6 +579,10 @@ const styles = StyleSheet.create({
   },
   errorBar: {
     backgroundColor: theme.colors.danger,
+    padding: theme.spacing(1.5),
+  },
+  warningBar: {
+    backgroundColor: theme.colors.unverified,
     padding: theme.spacing(1.5),
   },
   errorText: {

@@ -5,7 +5,7 @@ that is built so it cannot read what it carries, cannot tell who sent a message,
 and holds no personal identifier for anyone.
 
 > **Status: not audited.** This is a careful implementation of well-specified
-> constructions with 211 tests covering its security claims. That is not the
+> constructions with 254 tests covering its security claims. That is not the
 > same as an independent audit. Do not deploy it for people whose safety depends
 > on it until it has had one. See [docs/SECURITY.md](docs/SECURITY.md).
 
@@ -63,6 +63,14 @@ unverified and the UI says so explicitly rather than treating both paths as
 Argon2id-derived key; the identity key lives in the platform keystore, bound to
 device unlock and kept out of cloud backups.
 
+**What this does not do.** End-to-end encryption means the operator and the
+network cannot read your messages. It does not mean nobody ever can: plaintext
+exists on both phones, so anything controlling either device reads everything,
+and a recipient can always screenshot or forward. Metadata leaks too — the relay
+sees recipient addresses and IPs. [docs/ASSESSMENT.md §4](docs/ASSESSMENT.md)
+sets out the full boundary; it is worth reading before relying on any messenger,
+including this one.
+
 **Also, deliberately absent:** no analytics, no crash reporting, no advertising
 identifiers, no read receipts or typing indicators unless you turn them on (both
 leak behaviour), and no contacts, location, or camera permissions.
@@ -72,14 +80,16 @@ leak behaviour), and no contacts, location, or camera permissions.
 ## Layout
 
 ```
-packages/crypto      The cryptographic core. Platform-independent, 107 tests.
+packages/crypto      The cryptographic core. Platform-independent, 108 tests.
 packages/protocol    Wire types shared by client and relay.
 packages/relay       The store-and-forward server. 54 tests.
-apps/mobile          React Native (Expo) app. 50 core tests.
+apps/mobile          React Native (Expo) app. 92 tests (core logic + Android build config).
   src/core           Messenger, relay client, call manager - testable in Node.
   src/platform       Keystore, SQLite, WebRTC, transports.
   src/screens        UI.
 docs/SECURITY.md     Threat model, and an explicit list of what is not protected.
+docs/ASSESSMENT.md   Security audit, including the defects it found and fixed.
+docs/COMPARISON.md   How this differs from WhatsApp and Instagram, fairly.
 docs/PROTOCOL.md     Full protocol specification.
 ```
 
@@ -101,7 +111,7 @@ Requires Node 20 or newer.
 npm install
 npm run build          # build the workspace packages
 npm run typecheck      # strict typecheck, all packages
-npm test               # 211 tests
+npm test               # 254 tests
 ```
 
 ### The relay
@@ -116,29 +126,74 @@ if you need health signals, export aggregate counters rather than turning on a
 logger — per-request logs would reconstruct the delivery metadata the design
 exists to withhold.
 
-### The app
+### The Android app
+
+Requires the Android SDK (API 36) and JDK 17+. The native project in
+`apps/mobile/android` is committed for auditability, and is regenerated from
+the config plugins by `expo prebuild`.
 
 ```bash
 cd apps/mobile
+
+# Debug build on a connected device or emulator
 EXPO_PUBLIC_VEIL_RELAY_HTTP=https://relay.example \
 EXPO_PUBLIC_VEIL_RELAY_WS=wss://relay.example/v1/socket \
 EXPO_PUBLIC_VEIL_STUN=stun:stun.example:3478 \
-npx expo run:ios        # or run:android
+npx expo run:android
 ```
 
-Voice calls need a development build rather than Expo Go, because
-`react-native-webrtc` is a native module.
+Voice calls need this development build, not Expo Go: `react-native-webrtc` is
+a native module, and so is the frame-transform hook that makes call media
+end-to-end encrypted.
+
+**Release build.** Signing keys come from the environment, never the repo. The
+build fails rather than falling back to a debug key:
+
+```bash
+export VEIL_KEYSTORE_PATH=/secure/path/veil-release.jks
+export VEIL_KEYSTORE_PASSWORD=...
+export VEIL_KEY_ALIAS=veil
+export VEIL_KEY_PASSWORD=...
+cd apps/mobile/android && ./gradlew assembleRelease
+```
+
+**Regenerating the native project.** All Android hardening lives in
+`apps/mobile/plugins/`, so it is reapplied on every prebuild rather than being
+hand-edits that vanish:
+
+```bash
+cd apps/mobile && npx expo prebuild --platform android --clean
+npm test    # asserts the regenerated manifest and Gradle config are still hardened
+```
 
 Set `EXPO_PUBLIC_VEIL_RELAY_ONLY=true` to force media through TURN, which hides
 each participant's IP from the other. Safe for confidentiality — the TURN server
 still cannot hear the call — at the cost of latency.
+
+### What the Android build does about platform leaks
+
+Encryption does nothing about these, so the platform config handles them:
+
+| Leak | Handling |
+|---|---|
+| Recents-screen thumbnail and screenshots | `FLAG_SECURE` app-wide; a failure to set it is shown to the user, not assumed away |
+| Cloud backup copying the database | Android Backup **and** device-to-device transfer excluded for every storage domain |
+| Unlocked vault in memory | Wiped 30s after backgrounding, driven by elapsed time so a frozen process still locks |
+| Identity key extraction | Android Keystore, with reads bound to device credential where the device supports it |
+| Interception via an installed root CA | User-installed CAs not trusted; cleartext refused |
+| Forged app updates | Release signing from the environment; OTA JavaScript updates disabled |
+| Transitive permission creep | Permission list is closed and asserted by tests |
+
+`apps/mobile/test/androidConfig.test.ts` asserts all of it, because platform
+hardening regresses invisibly: a dependency adds a permission, `prebuild`
+regenerates the manifest, and nobody notices until an audit.
 
 ---
 
 ## Testing approach
 
 The tests assert the security properties, not just the happy path. Among the
-211:
+254:
 
 - key substitution, prekey downgrade, and forged-bundle rejection
 - forged sender identities and rewritten routing fields

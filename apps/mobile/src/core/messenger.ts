@@ -742,6 +742,16 @@ export class Messenger {
     this.sessions.delete(address);
   }
 
+  /**
+   * Live sessions, so the app can wipe their ratchet keys when it locks.
+   *
+   * Ratchet state is not persisted, so holding these after a lock keeps key
+   * material in memory for no benefit at all.
+   */
+  liveSessions(): Session[] {
+    return [...this.sessions.values()];
+  }
+
   /** Sweep expired disappearing messages. Called on a timer by the app. */
   async purgeExpired(): Promise<number> {
     const now = this.now();

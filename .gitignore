@@ -9,3 +9,17 @@ coverage/
 !.env.example
 .expo/
 *.tsbuildinfo
+
+# Release signing material must never be committed. The Android debug keystore
+# that ships with the React Native template is deliberately allowed: its
+# password is the public, well-known "android" and it can only sign debug
+# builds. Anything else that looks like a signing key is blocked.
+*.jks
+*.p12
+*.pepk
+release.keystore
+upload.keystore
+!apps/mobile/android/app/debug.keystore
+
+# Local Android SDK location, machine-specific.
+local.properties

@@ -38,20 +38,35 @@ import { AuthenticationError, MalformedInputError, VaultLockedError } from './er
 import { Reader, Writer, utf8 } from './wire.js';
 
 /**
- * Argon2id parameters.
+ * Argon2id parameters: 46 MiB, 2 passes, 1 lane.
  *
- * 64 MiB / 3 passes / 1 lane is the interactive profile: roughly 100-300ms on a
- * mid-range phone, which users tolerate at unlock, while costing an attacker
- * 64 MiB of memory per parallel guess. That memory cost is the point — it is
- * what makes GPU and ASIC cracking uneconomic, and it is why Argon2id is used
- * here rather than PBKDF2, which parallelises almost for free.
+ * One of the two profiles OWASP documents for Argon2id, chosen against
+ * measured cost rather than guessed. Measured with this implementation on a
+ * 2.8 GHz x86 core under V8:
  *
- * Stored in the header so the parameters can be raised later without making
- * existing vaults unreadable.
+ *   64 MiB / t=3 ... 1620 ms
+ *   46 MiB / t=2 .... 780 ms   <- chosen
+ *   32 MiB / t=3 .... 795 ms
+ *   19 MiB / t=2 .... 315 ms   (OWASP floor)
+ *
+ * Hermes on a mid-range phone is materially slower than V8 on a server core,
+ * so treat the on-device figure as a small multiple of these. 64 MiB / t=3 was
+ * the original choice and is wrong for a phone: several seconds of blocked UI
+ * at unlock invites an Android ANR, and an unlock that feels broken gets
+ * "fixed" either by a developer cutting the parameters to something far weaker
+ * or by users picking a short passphrase. Both cost more security than the
+ * extra memory buys.
+ *
+ * The memory cost is the whole point of Argon2id: it is what makes GPU and
+ * ASIC cracking uneconomic, and why this is used rather than PBKDF2, which
+ * parallelises almost for free.
+ *
+ * Parameters are stored in the wrapper, so they can be raised later - as
+ * phones get faster - without making existing vaults unreadable.
  */
 export const ARGON2_PROFILE = {
-  memoryKiB: 65536,
-  iterations: 3,
+  memoryKiB: 47104,
+  iterations: 2,
   parallelism: 1,
 } as const;
 
