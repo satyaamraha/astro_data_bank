@@ -21,28 +21,20 @@
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, KeyDigits, Screen, SecurityNotice, VerificationBadge } from '../ui/components.js';
 import { theme } from '../ui/theme.js';
+import { groupSafetyNumber } from '../core/display.js';
 import type { Contact } from '../core/types.js';
-
-/** Insert a space every five digits, matching how the number is read aloud. */
-export function groupSafetyNumber(value: string): string[] {
-  const groups: string[] = [];
-  for (let i = 0; i < value.length; i += 5) groups.push(value.slice(i, i + 5));
-  return groups;
-}
 
 export function VerifyScreen({
   contact,
   safetyNumber,
   onBack,
   onMarkVerified,
-  onScanCode,
   onAcceptChange,
 }: {
   contact: Contact;
   safetyNumber?: string;
   onBack: () => void;
   onMarkVerified: () => void;
-  onScanCode: () => void;
   onAcceptChange: () => void;
 }) {
   const groups = safetyNumber ? groupSafetyNumber(safetyNumber) : [];
@@ -92,7 +84,6 @@ export function VerifyScreen({
         />
 
         <View style={styles.actions}>
-          <Button label="Scan their code" onPress={onScanCode} />
           {contact.verification === 'changed' ? (
             <Button
               label="I compared it — accept the new key"

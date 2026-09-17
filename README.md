@@ -5,7 +5,7 @@ that is built so it cannot read what it carries, cannot tell who sent a message,
 and holds no personal identifier for anyone.
 
 > **Status: not audited.** This is a careful implementation of well-specified
-> constructions with 195 tests covering its security claims. That is not the
+> constructions with 209 tests covering its security claims. That is not the
 > same as an independent audit. Do not deploy it for people whose safety depends
 > on it until it has had one. See [docs/SECURITY.md](docs/SECURITY.md).
 
@@ -51,6 +51,14 @@ Veil shows a 60-digit safety number for each conversation and four spoken words
 during each call; if they match, nobody is in the middle. Verification state is
 visible on every conversation row, not buried in a menu.
 
+**Adding a contact by code starts the conversation already verified.** A
+verification code carries the full identity plus a signature proving the keys
+belong together, so pasting one is stronger than reading digits aloud — it
+compares all 256 bits instead of whatever prefix a human checks. Adding by
+address only asks the server where to look, so those conversations start
+unverified and the UI says so explicitly rather than treating both paths as
+"add contact".
+
 **A seized phone gives up nothing.** History is encrypted under an
 Argon2id-derived key; the identity key lives in the platform keystore, bound to
 device unlock and kept out of cloud backups.
@@ -67,7 +75,7 @@ leak behaviour), and no contacts, location, or camera permissions.
 packages/crypto      The cryptographic core. Platform-independent, 105 tests.
 packages/protocol    Wire types shared by client and relay.
 packages/relay       The store-and-forward server. 54 tests.
-apps/mobile          React Native (Expo) app. 36 core tests.
+apps/mobile          React Native (Expo) app. 50 core tests.
   src/core           Messenger, relay client, call manager - testable in Node.
   src/platform       Keystore, SQLite, WebRTC, transports.
   src/screens        UI.
@@ -93,7 +101,7 @@ Requires Node 20 or newer.
 npm install
 npm run build          # build the workspace packages
 npm run typecheck      # strict typecheck, all packages
-npm test               # 195 tests
+npm test               # 209 tests
 ```
 
 ### The relay
@@ -130,7 +138,7 @@ still cannot hear the call — at the cost of latency.
 ## Testing approach
 
 The tests assert the security properties, not just the happy path. Among the
-195:
+209:
 
 - key substitution, prekey downgrade, and forged-bundle rejection
 - forged sender identities and rewritten routing fields

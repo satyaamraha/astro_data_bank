@@ -12,7 +12,7 @@
 import './platform/random.js';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Share, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import {
   createVault,
@@ -38,6 +38,8 @@ import { ConversationsScreen, type ConversationRow } from './screens/Conversatio
 import { ChatScreen } from './screens/ChatScreen.js';
 import { VerifyScreen } from './screens/VerifyScreen.js';
 import { CallScreen } from './screens/CallScreen.js';
+import { MyCodeScreen } from './screens/MyCodeScreen.js';
+import { NewConversationScreen } from './screens/NewConversationScreen.js';
 import { theme } from './ui/theme.js';
 
 const VAULT_KEY = 'veil.vault.wrapper';
@@ -61,6 +63,8 @@ type Route =
   | { readonly name: 'conversations' }
   | { readonly name: 'chat'; readonly address: string }
   | { readonly name: 'verify'; readonly address: string }
+  | { readonly name: 'my-code' }
+  | { readonly name: 'new-conversation' }
   | { readonly name: 'call' };
 
 export function App({ config }: { config: AppConfig }) {
@@ -355,11 +359,9 @@ export function App({ config }: { config: AppConfig }) {
             })();
           }}
           onChangeDisappear={(seconds) => {
-            void (async () => {
-              if (!conversation) return;
-              conversation.disappearAfterSeconds = seconds;
-              await refreshLists();
-            })();
+            void messengerRef.current
+              ?.setDisappearTimer(route.address, seconds)
+              .then(refreshLists);
           }}
         />
       </>
@@ -392,6 +394,56 @@ export function App({ config }: { config: AppConfig }) {
     );
   }
 
+  if (route.name === 'my-code') {
+    return (
+      <>
+        <StatusBar style="light" />
+        <MyCodeScreen
+          address={myAddress}
+          code={messengerRef.current?.verificationCode() ?? ''}
+          onBack={() => setRoute({ name: 'conversations' })}
+          onShare={() => {
+            const code = messengerRef.current?.verificationCode();
+            if (code !== undefined) void Share.share({ message: code });
+          }}
+        />
+      </>
+    );
+  }
+
+  if (route.name === 'new-conversation') {
+    return (
+      <>
+        <StatusBar style="light" />
+        <NewConversationScreen
+          busy={busy}
+          {...(error !== undefined ? { error } : {})}
+          onBack={() => setRoute({ name: 'conversations' })}
+          onStart={(input, kind) => {
+            void (async () => {
+              const messenger = messengerRef.current;
+              if (!messenger) return;
+              setBusy(true);
+              setError(undefined);
+              try {
+                const address =
+                  kind === 'code'
+                    ? await messenger.addContactFromCode(input)
+                    : (await messenger.startConversation(input), input);
+                await refreshLists();
+                await openChat(address);
+              } catch (caught) {
+                setError((caught as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            })();
+          }}
+        />
+      </>
+    );
+  }
+
   return (
     <>
       <StatusBar style="light" />
@@ -399,8 +451,11 @@ export function App({ config }: { config: AppConfig }) {
         rows={rows}
         myAddress={myAddress}
         onOpen={(address) => void openChat(address)}
-        onNewConversation={() => setRoute({ name: 'conversations' })}
-        onShowMyCode={() => setRoute({ name: 'conversations' })}
+        onNewConversation={() => {
+          setError(undefined);
+          setRoute({ name: 'new-conversation' });
+        }}
+        onShowMyCode={() => setRoute({ name: 'my-code' })}
       />
       {error !== undefined ? (
         <View style={styles.errorBar}>
@@ -444,7 +499,6 @@ function VerifyContainer({
       {...(safetyNumber !== undefined ? { safetyNumber } : {})}
       onBack={onBack}
       onMarkVerified={onMarkVerified}
-      onScanCode={onBack}
       onAcceptChange={onAcceptChange}
     />
   );

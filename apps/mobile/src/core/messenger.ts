@@ -23,8 +23,10 @@ import {
   publicIdentityOf,
   random,
   restoreIdentity,
+  parseVerificationQrPayload,
   safetyNumber,
   startSession,
+  verificationQrPayload,
   toHex,
   type PrivateIdentity,
   type PublicIdentity,
@@ -187,15 +189,93 @@ export class Messenger {
   // Sessions
   // -------------------------------------------------------------------------
 
+  /**
+   * Ratchet state is intentionally *not* resumed across restarts.
+   *
+   * A partially written ratchet is worse than no ratchet: reusing a chain key
+   * after a rollback would repeat a nonce and break confidentiality outright.
+   * Re-handshaking costs one round trip and is always safe, so sessions are
+   * rebuilt on first send. Stored session metadata (peer identities) survives,
+   * which is what verification and call key derivation need.
+   *
+   * Nothing to do at start-up as a result; kept as a named step so the reason
+   * lives next to the decision rather than in a commit message.
+   */
   private async restoreSessions(): Promise<void> {
-    // Session *metadata* is restored (who we have talked to), but ratchet state
-    // is intentionally not resumed across restarts in this build: a partially
-    // written ratchet is worse than a fresh handshake, because reusing a chain
-    // key after a rollback would repeat a nonce. Re-handshaking costs one round
-    // trip and is always safe.
-    for (const { id } of await this.sessionMeta.all()) {
-      void id;
+    return;
+  }
+
+  /** Set the disappearing-message timer for a conversation, in seconds. */
+  async setDisappearTimer(address: string, seconds: number): Promise<void> {
+    const conversation = await this.conversations.get(address);
+    if (!conversation) return;
+    conversation.disappearAfterSeconds = seconds;
+    await this.conversations.put(address, conversation);
+    this.options.events?.onConversationChanged?.(conversation);
+  }
+
+  /**
+   * Begin a conversation with an address the user entered or scanned.
+   *
+   * Fetches and verifies the peer's bundle immediately, so a bad address or a
+   * substituted key fails here rather than on the user's first message.
+   */
+  async startConversation(peerAddress: string): Promise<void> {
+    await this.ensureSession(peerAddress);
+    await this.touchConversation(peerAddress, '', 0);
+  }
+
+  /**
+   * This device's verification code: the identity, encoded for sharing.
+   *
+   * Contains both public keys and the binding signature, so a contact who
+   * receives it out-of-band can verify the binding themselves rather than
+   * trusting digits read over a channel.
+   */
+  verificationCode(): string {
+    return toBase64Url(verificationQrPayload(publicIdentityOf(this.identity)));
+  }
+
+  /**
+   * Add a contact from a shared verification code.
+   *
+   * The code's binding signature is checked by `parseVerificationQrPayload`,
+   * and because the address is a hash of the identity key, a forged code cannot
+   * claim someone else's address. A contact added this way starts *verified*:
+   * the user obtained the full key out-of-band, which is strictly stronger
+   * evidence than comparing a digit prefix aloud.
+   */
+  async addContactFromCode(code: string): Promise<string> {
+    const identity = parseVerificationQrPayload(fromBase64Url(code));
+    const peerAddress = addressOf(identity);
+    if (peerAddress === this.address) {
+      throw new Error('that is your own code');
     }
+
+    await this.sessionMeta.put(peerAddress, {
+      peerIdentity: {
+        signingPublicKey: toBase64Url(identity.signingPublicKey),
+        exchangePublicKey: toBase64Url(identity.exchangePublicKey),
+        exchangeKeySignature: toBase64Url(identity.exchangeKeySignature),
+      },
+    });
+
+    const existing = await this.contacts.get(peerAddress);
+    const contact: Contact = existing ?? {
+      address: peerAddress,
+      displayName: peerAddress.slice(0, 8),
+      identityKey: toBase64Url(identity.signingPublicKey),
+      verification: 'verified',
+    };
+    contact.identityKey = toBase64Url(identity.signingPublicKey);
+    contact.verification = 'verified';
+    delete contact.identityChangedAt;
+    await this.contacts.put(peerAddress, contact);
+    this.pinnedKeyCache.set(peerAddress, identity.signingPublicKey);
+    this.options.events?.onContactChanged?.(contact);
+
+    await this.touchConversation(peerAddress, '', 0);
+    return peerAddress;
   }
 
   private async ensureSession(peerAddress: string): Promise<Session> {

@@ -166,7 +166,7 @@ undecryptable.
 
 ### 3.9 This code has not been independently audited
 
-It is a careful implementation of well-specified constructions with 195 tests
+It is a careful implementation of well-specified constructions with 209 tests
 covering the security claims, including negative tests for key substitution,
 forged senders, replays, tampering, and resource exhaustion. That is not the
 same as an audit. Do not deploy it for people whose safety depends on it without
@@ -233,8 +233,13 @@ Ordered by how much they would improve the security posture:
    open source" says nothing about the binary users install.
 5. **Persistent, crash-safe ratchet state.** Needs an atomic write-ahead
    discipline that cannot roll back a chain key (3.8).
-6. **Multi-device support.** Currently one device per identity.
-7. **Sealed-sender delivery tokens for recipient privacy**, or a mixnet
+6. **QR code scanning.** Verification codes can be shared and pasted as text
+   today, and the payload format plus its signature check are implemented and
+   tested (`verificationQrPayload` / `parseVerificationQrPayload`). What is
+   missing is the camera flow to render and scan them, which is the easiest
+   verification path for non-technical users to get right.
+7. **Multi-device support.** Currently one device per identity.
+8. **Sealed-sender delivery tokens for recipient privacy**, or a mixnet
    transport, to address 3.1 and 3.2.
 
 ---

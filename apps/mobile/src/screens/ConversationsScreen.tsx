@@ -11,19 +11,12 @@
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Button, Divider, Screen, SecurityNotice, VerificationBadge } from '../ui/components.js';
 import { theme } from '../ui/theme.js';
+import { relativeTime } from '../core/display.js';
 import type { Contact, Conversation } from '../core/types.js';
 
 export interface ConversationRow {
   readonly conversation: Conversation;
   readonly contact?: Contact;
-}
-
-function relativeTime(timestamp: number, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
-  if (seconds < 60) return 'now';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
-  return `${Math.floor(seconds / 86_400)}d`;
 }
 
 export function ConversationsScreen({
