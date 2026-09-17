@@ -1,0 +1,212 @@
+name: Android APK
+
+# Builds installable APKs on GitHub's runners, which have the Android SDK and
+# NDK preinstalled. This exists because building locally otherwise means
+# installing several gigabytes of Android tooling on a laptop.
+#
+# Two jobs, deliberately:
+#
+#   debug   - always runs, needs no secrets, and produces an APK you can
+#             install immediately to smoke-test. Signed with the standard
+#             Android debug key, so it is for testing only.
+#   release - runs only once you have added your own signing key as repository
+#             secrets. This is the APK to actually install and keep.
+#
+# The split matters: R8 minification is enabled for release builds and strips
+# code that is reached reflectively. A release APK can therefore fail at
+# runtime where a debug one works, so the release job installs nothing blindly
+# and the workflow keeps both artifacts for comparison.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'apps/mobile/**'
+      - 'packages/**'
+      - '.github/workflows/android-release.yml'
+  workflow_dispatch:
+    inputs:
+      relay_http:
+        description: 'Relay HTTPS base URL (e.g. https://veil.example.com)'
+        required: false
+        default: ''
+      relay_ws:
+        description: 'Relay WebSocket URL (e.g. wss://veil.example.com/v1/socket)'
+        required: false
+        default: ''
+      turn_url:
+        description: 'STUN/TURN URL (e.g. turn:veil.example.com:3478)'
+        required: false
+        default: ''
+
+# The release job handles signing material. Least privilege: no write access to
+# the repository is needed to produce an artifact.
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    name: Debug APK (installable, no secrets needed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The app bundles @veil/crypto and @veil/protocol from the workspace, so
+      # they must be built before Metro can resolve them.
+      - name: Build workspace packages
+        run: |
+          npm run build --workspace @veil/crypto
+          npm run build --workspace @veil/protocol
+
+      # Fail before spending ten minutes on a native build if the logic is
+      # broken. Also re-asserts the Android hardening.
+      - name: Verify
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Regenerate the native project from the config plugins
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --no-install
+        env:
+          EXPO_PUBLIC_VEIL_RELAY_HTTP: ${{ inputs.relay_http }}
+          EXPO_PUBLIC_VEIL_RELAY_WS: ${{ inputs.relay_ws }}
+          EXPO_PUBLIC_VEIL_STUN: ${{ inputs.turn_url }}
+
+      - name: Assemble debug APK
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+        env:
+          EXPO_PUBLIC_VEIL_RELAY_HTTP: ${{ inputs.relay_http }}
+          EXPO_PUBLIC_VEIL_RELAY_WS: ${{ inputs.relay_ws }}
+          EXPO_PUBLIC_VEIL_STUN: ${{ inputs.turn_url }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: veil-debug-apk
+          path: apps/mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Signed release APK
+    runs-on: ubuntu-latest
+    # Only attempt this when a signing key is configured. Without it the
+    # Gradle build refuses to fall back to the debug key, so the job would
+    # fail by design rather than produce something insecurely signed.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for a signing key
+        id: key
+        run: |
+          if [ -z "${{ secrets.VEIL_KEYSTORE_BASE64 }}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No VEIL_KEYSTORE_BASE64 secret set - skipping the release build. See docs/TWO_PERSON_SETUP.md for how to generate and add a signing key."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.key.outputs.configured == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        if: steps.key.outputs.configured == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+        if: steps.key.outputs.configured == 'true'
+
+      - name: Install dependencies
+        if: steps.key.outputs.configured == 'true'
+        run: npm ci
+
+      - name: Build workspace packages
+        if: steps.key.outputs.configured == 'true'
+        run: |
+          npm run build --workspace @veil/crypto
+          npm run build --workspace @veil/protocol
+
+      - name: Verify
+        if: steps.key.outputs.configured == 'true'
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Regenerate the native project from the config plugins
+        if: steps.key.outputs.configured == 'true'
+        working-directory: apps/mobile
+        run: npx expo prebuild --platform android --no-install
+        env:
+          EXPO_PUBLIC_VEIL_RELAY_HTTP: ${{ inputs.relay_http }}
+          EXPO_PUBLIC_VEIL_RELAY_WS: ${{ inputs.relay_ws }}
+          EXPO_PUBLIC_VEIL_STUN: ${{ inputs.turn_url }}
+
+      # Written to the runner's temp dir, not the workspace, so it cannot be
+      # picked up by a later step or an artifact upload.
+      - name: Materialise the signing key
+        if: steps.key.outputs.configured == 'true'
+        run: |
+          echo "${{ secrets.VEIL_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/veil-release.jks"
+          test -s "$RUNNER_TEMP/veil-release.jks"
+
+      - name: Assemble release APK
+        if: steps.key.outputs.configured == 'true'
+        working-directory: apps/mobile/android
+        run: ./gradlew assembleRelease --no-daemon
+        env:
+          VEIL_KEYSTORE_PATH: ${{ runner.temp }}/veil-release.jks
+          VEIL_KEYSTORE_PASSWORD: ${{ secrets.VEIL_KEYSTORE_PASSWORD }}
+          VEIL_KEY_ALIAS: ${{ secrets.VEIL_KEY_ALIAS }}
+          VEIL_KEY_PASSWORD: ${{ secrets.VEIL_KEY_PASSWORD }}
+          EXPO_PUBLIC_VEIL_RELAY_HTTP: ${{ inputs.relay_http }}
+          EXPO_PUBLIC_VEIL_RELAY_WS: ${{ inputs.relay_ws }}
+          EXPO_PUBLIC_VEIL_STUN: ${{ inputs.turn_url }}
+
+      # Prove the APK is signed with the intended key, not the debug key. The
+      # template's default release config used the committed debug keystore, so
+      # this check is guarding against a regression that has happened once.
+      - name: Verify the signature
+        if: steps.key.outputs.configured == 'true'
+        working-directory: apps/mobile/android
+        run: |
+          APK=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "Verifying $APK"
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs --verbose "$APK" | tee /tmp/sig.txt
+          if grep -qi 'CN=Android Debug' /tmp/sig.txt; then
+            echo "::error::APK is signed with the Android debug key. Refusing to publish it."
+            exit 1
+          fi
+
+      - name: Remove the signing key from the runner
+        if: always() && steps.key.outputs.configured == 'true'
+        run: shred -u "$RUNNER_TEMP/veil-release.jks" 2>/dev/null || rm -f "$RUNNER_TEMP/veil-release.jks"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.key.outputs.configured == 'true'
+        with:
+          name: veil-release-apk
+          path: apps/mobile/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
