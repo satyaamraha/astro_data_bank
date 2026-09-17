@@ -1,0 +1,41 @@
+{
+  "expo": {
+    "name": "Veil",
+    "slug": "veil",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0E13",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "app.veil.messenger",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Veil needs the microphone for encrypted voice calls. Audio never leaves your device unencrypted.",
+        "ITSAppUsesNonExemptEncryption": true,
+        "UIBackgroundModes": ["voip", "audio"],
+        "NSAllowsArbitraryLoads": false
+      }
+    },
+    "android": {
+      "package": "app.veil.messenger",
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_CONTACTS",
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION"
+      ],
+      "allowBackup": false
+    },
+    "plugins": ["expo-secure-store", "expo-sqlite"],
+    "extra": {
+      "privacyNotes": "No analytics, no crash reporting, no advertising identifiers. allowBackup is false on Android so the encrypted database is not copied into Google's backup service."
+    }
+  }
+}

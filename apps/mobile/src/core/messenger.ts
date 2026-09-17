@@ -519,6 +519,23 @@ export class Messenger {
     return this.contacts.get(address);
   }
 
+  /**
+   * The peer's public identity, as recorded for this conversation.
+   *
+   * The call layer needs this to derive media keys bound to both identities.
+   * Returning our own identity instead would make both ends derive different
+   * keys and every call would fail its SAS comparison.
+   */
+  async peerIdentity(address: string): Promise<PublicIdentity | undefined> {
+    const stored = await this.sessionMeta.get(address);
+    if (!stored) return undefined;
+    return {
+      signingPublicKey: fromBase64Url(stored.peerIdentity.signingPublicKey),
+      exchangePublicKey: fromBase64Url(stored.peerIdentity.exchangePublicKey),
+      exchangeKeySignature: fromBase64Url(stored.peerIdentity.exchangeKeySignature),
+    };
+  }
+
   /** The 60-digit number both users compare out-of-band. */
   async safetyNumberWith(address: string): Promise<string | undefined> {
     const stored = await this.sessionMeta.get(address);
