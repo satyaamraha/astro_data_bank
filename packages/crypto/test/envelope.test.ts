@@ -15,7 +15,6 @@ import {
   startSession,
   unpad,
   random,
-  utf8,
 } from '../src/index.js';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { Device, connectedPair, flipBit, text } from './helpers.js';
@@ -220,6 +219,51 @@ describe('session establishment', () => {
 
     // Bob receives only the third message and can still establish the session.
     expect(bob.receiveText(third)).toBe('third');
+  });
+
+  it('accepts a burst of messages that all repeat the preamble', () => {
+    // Regression: the initiator repeats its handshake on every message until
+    // it gets a reply. The responder must recognise the second and later
+    // copies as the same handshake and use the session it already built -
+    // trying to redo the handshake fails, because the one-time prekey is spent.
+    const alice = new Device('alice');
+    const bob = new Device('bob');
+    alice.start(bob);
+
+    const burst = Array.from({ length: 10 }, (_, i) =>
+      alice.send(bob.address, `offline ${i}`),
+    );
+    burst.forEach((envelope, i) => {
+      expect(bob.receiveText(envelope)).toBe(`offline ${i}`);
+    });
+  });
+
+  it('still rejects a replay of a repeated-preamble message', () => {
+    // The fix above must not weaken replay protection: the ratchet has already
+    // consumed that message key, so a second copy is refused.
+    const alice = new Device('alice');
+    const bob = new Device('bob');
+    alice.start(bob);
+    const first = alice.send(bob.address, 'one');
+    const second = alice.send(bob.address, 'two');
+
+    expect(bob.receiveText(first)).toBe('one');
+    expect(bob.receiveText(second)).toBe('two');
+    expect(() => bob.receive(second)).toThrow(SessionStateError);
+  });
+
+  it('delivers a preamble burst that arrives out of order', () => {
+    const alice = new Device('alice');
+    const bob = new Device('bob');
+    alice.start(bob);
+    const one = alice.send(bob.address, 'first');
+    const two = alice.send(bob.address, 'second');
+    const three = alice.send(bob.address, 'third');
+
+    // Bob's session is built by whichever copy lands first.
+    expect(bob.receiveText(three)).toBe('third');
+    expect(bob.receiveText(one)).toBe('first');
+    expect(bob.receiveText(two)).toBe('second');
   });
 
   it('stops resending the preamble once the peer replies', () => {

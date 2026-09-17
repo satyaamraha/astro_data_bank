@@ -48,6 +48,9 @@ export {
   X25519_PUBLIC_LEN,
   constantTimeEqual,
   random,
+  sign,
+  signingPublicKey,
+  verify,
   wipe,
   type KeyPair,
 } from './primitives.js';

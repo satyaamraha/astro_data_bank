@@ -57,6 +57,16 @@ export interface Session {
    * message may be dropped and the peer cannot build a session without it.
    */
   pendingPreKey?: PreKeyPreamble | undefined;
+  /**
+   * For a responder session: the initiator ephemeral key that created it.
+   *
+   * The initiator repeats its preamble on every message until we reply, so we
+   * receive the same handshake many times. This lets us recognise "same
+   * handshake, later message" and decrypt it with the session we already
+   * built, instead of trying to redo a handshake whose one-time prekey is
+   * already spent.
+   */
+  establishedBy?: Uint8Array | undefined;
 }
 
 /** The handshake material the initiator prepends to early messages. */
@@ -279,6 +289,29 @@ export function decryptEnvelope(params: {
     const body = reader.bytes();
     reader.end();
 
+    // The initiator resends the preamble until we reply, so a prekey message
+    // for a handshake we have already completed is normal traffic, not an
+    // attack. Route it to the session that handshake produced; its one-time
+    // prekeys are gone, so redoing the handshake would (correctly) fail.
+    const existing = params.lookupSession(senderAddress);
+    if (
+      existing?.establishedBy &&
+      constantTimeEqual(existing.establishedBy, preamble.ephemeralPublicKey)
+    ) {
+      const repeated = decodeRatchetMessage(new Reader(body));
+      const paddedRepeat = ratchetDecrypt(existing.ratchet, repeated);
+      try {
+        return {
+          senderIdentity: opened.senderIdentity,
+          plaintext: unpad(paddedRepeat),
+          session: existing,
+          isNewSession: false,
+        };
+      } finally {
+        wipe(paddedRepeat);
+      }
+    }
+
     const signedPreKey = preKeys.signedPreKey(preamble.keyIds.signedPreKeyId);
     if (!signedPreKey) {
       throw new SessionStateError(
@@ -321,7 +354,11 @@ export function decryptEnvelope(params: {
     });
 
     const ratchet = initialiseResponder(rootSecret, signedPreKey, associatedData);
-    const session: Session = { peerIdentity: opened.senderIdentity, ratchet };
+    const session: Session = {
+      peerIdentity: opened.senderIdentity,
+      ratchet,
+      establishedBy: preamble.ephemeralPublicKey,
+    };
 
     const message = decodeRatchetMessage(new Reader(body));
     // Decrypt before consuming one-time keys: if this fails, the keys stay
