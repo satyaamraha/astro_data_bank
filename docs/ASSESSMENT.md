@@ -4,7 +4,7 @@ An audit of Veil against its own claims, including defects found in the
 process. Written to be useful to someone deciding whether to trust it, which
 means the findings section comes before the reassurance.
 
-**Scope.** Static review of the whole codebase, plus the 254 automated tests,
+**Scope.** Static review of the whole codebase, plus the 283 automated tests,
 plus targeted measurement (Argon2id timings, relay behaviour under real HTTP).
 **Not** in scope: dynamic analysis on a device, fuzzing, side-channel
 measurement, or review by anyone other than the author of the code. That last
@@ -123,6 +123,18 @@ smoke-tested — install, register, send, call — before distribution.
 
 ### Low
 
+**L-0 · Passphrase guessing was unthrottled.** *Fixed.* Argon2id makes each
+guess cost ~1s, which defeats a fast offline attack on a copied database, but
+it did nothing against someone holding the phone and trying passphrases by
+hand — a few thousand attempts is a weekend. Now three free attempts (for
+typos) then escalating lockouts to a five-minute cap. The counter is stored in
+the platform keystore rather than the encrypted database: beside the data, an
+attacker could copy the database, burn attempts, restore the copy and reset the
+throttle. Parsing fails closed, so corrupting the counter imposes a lockout
+rather than clearing it. Wipe-after-N is available but off by default — for a
+personal two-person app with no backup, a pocket or a child should not be able
+to destroy the only copy of a history.
+
 **L-1 · Notification content is unimplemented, and is a trap.** *Open.*
 `POST_NOTIFICATIONS` is declared but no notification code exists. The obvious
 implementation puts the sender and a message preview in the notification, which
@@ -198,6 +210,12 @@ Stated so the assessment is not only a list of problems.
   outright where frame encryption is unavailable.
 - **The crypto boundary.** `primitives.ts` is the only file importing a
   cryptographic library, so every algorithm choice is reviewable in one screen.
+- **The pairing lock.** Enforced before the session is stored and before the
+  payload is interpreted, so refused traffic never touches ratchet state or the
+  message store. Tests confirm a stranger's message creates no conversation, no
+  contact and no history; that an unpaired device accepts nothing at all; that
+  sending to a non-paired address is refused; and that re-pairing requires an
+  explicit unpair, which deletes the history it could no longer decrypt.
 
 ---
 
@@ -239,10 +257,16 @@ What it cannot prevent, no matter how good the cryptography:
    Timing and volume leak. Sender anonymity is protected; anonymity is not.
 5. **Traffic analysis.** An observer watching both users' connections can
    correlate them. There is no cover traffic.
-6. **An unverified conversation.** If neither party ever compares safety
-   numbers, an attacker who substitutes keys at first contact reads everything,
-   and every other defence in the system is bypassed. **This is the most likely
-   real-world failure**, and it depends on user behaviour rather than code.
+6. **An unverified conversation** — *mitigated in paired mode.* If neither
+   party ever compares safety numbers, an attacker who substitutes keys at
+   first contact reads everything, and every other defence is bypassed. This
+   was the most likely real-world failure. The two-person **paired mode** (now
+   the default) closes it: pairing happens once in person via a code carrying
+   the peer's signed identity, nothing the relay says is trusted, traffic from
+   any other identity is discarded before decryption, and a key change is a
+   hard stop rather than a dismissable prompt. What remains is that the users
+   must actually exchange codes in person; if they paste a code from a channel
+   an attacker controls, the attack works as before.
 7. **Implementation bugs.** See H-1. Three real bugs were found in this
    codebase by its own author during this review. It is not reasonable to
    assume that is all of them.

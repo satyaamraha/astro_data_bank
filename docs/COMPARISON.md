@@ -142,7 +142,7 @@ This is not a close call on several axes, and pretending otherwise would be
 dishonest.
 
 1. **It has been audited and attacked for a decade.** Veil has not been
-   independently audited at all. A careful implementation with 254 tests is not
+   independently audited at all. A careful implementation with 283 tests is not
    equivalent to adversarial review by people paid to break it. This is the
    single strongest argument for using WhatsApp or Signal instead.
 2. **Reliability.** Push notifications, multi-device, message history sync,

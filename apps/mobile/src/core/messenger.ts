@@ -39,6 +39,13 @@ import { decodeEnvelope } from '@veil/protocol';
 import { RelayClient } from './relayClient.js';
 import { EncryptedCollection, type Database, type SecretStore } from './storage.js';
 import {
+  createPairing,
+  decideInbound,
+  decideOutbound,
+  explainRefusal,
+  type PairingState,
+} from './pairing.js';
+import {
   decodePayload,
   encodePayload,
   type Contact,
@@ -60,6 +67,14 @@ export interface MessengerEvents {
   onContactChanged?: (contact: Contact) => void;
   /** A pinned contact's key changed. The UI must warn prominently. */
   onIdentityChanged?: (address: string) => void;
+  /**
+   * Traffic was refused by the pairing lock.
+   *
+   * 'stranger' is routine and can stay quiet; 'key-changed' must be shown
+   * prominently, because it means either a reinstall or an interception
+   * attempt.
+   */
+  onBlocked?: (reason: 'not-paired' | 'stranger' | 'key-changed', detail: string) => void;
   onCallPayload?: (peerAddress: string, payload: Payload) => void;
   onTyping?: (peerAddress: string, typing: boolean) => void;
 }
@@ -70,6 +85,19 @@ export interface MessengerOptions {
   readonly database: Database;
   readonly vault: Vault;
   readonly events?: MessengerEvents;
+  /**
+   * How strictly the app restricts who it will talk to.
+   *
+   * - `'paired'` (the default): exactly one peer, established in person, and
+   *   everything else discarded before it reaches the ratchet. This is the
+   *   two-person configuration and it is strictly stronger, because it removes
+   *   the first-contact key-substitution risk that no protocol can detect.
+   * - `'open'`: any contact, as a general-purpose messenger. First contact then
+   *   relies on the user comparing safety numbers afterwards.
+   *
+   * Defaulting to `'paired'` means the weaker mode is a deliberate choice.
+   */
+  readonly mode?: 'paired' | 'open';
   /** Send delivery/read receipts. Off by default: it is behavioural metadata. */
   readonly sendReceipts?: boolean;
   /** Send typing indicators. Off by default, for the same reason. */
@@ -95,6 +123,19 @@ export class Messenger {
   private readonly conversations: EncryptedCollection<Conversation>;
   private readonly messages: EncryptedCollection<Message>;
   private readonly sessionMeta: EncryptedCollection<StoredSession>;
+  private readonly pairingStore: EncryptedCollection<PairingState>;
+  /**
+   * Cached pairing, so the inbound check is synchronous.
+   *
+   * The check has to run before any ratchet work, and the decrypt path is not
+   * async at that point, so the state is loaded at unlock and kept in memory.
+   */
+  private pairing?: PairingState | undefined;
+
+  /** True when the pairing lock is in force. */
+  private get paired(): boolean {
+    return (this.options.mode ?? 'paired') === 'paired';
+  }
 
   private readonly now: () => number;
 
@@ -108,6 +149,7 @@ export class Messenger {
     );
     this.messages = new EncryptedCollection(options.database, options.vault, 'messages');
     this.sessionMeta = new EncryptedCollection(options.database, options.vault, 'sessions');
+    this.pairingStore = new EncryptedCollection(options.database, options.vault, 'pairing');
   }
 
   // -------------------------------------------------------------------------
@@ -153,6 +195,7 @@ export class Messenger {
 
     this.preKeys = new InMemoryPreKeyStore(this.identity);
     this.address = addressOf(publicIdentityOf(this.identity));
+    this.pairing = await this.pairingStore.get('peer');
 
     await this.options.relay.register(publicIdentityOf(this.identity), this.preKeys.published());
     await this.options.relay.authenticate(this.identity, this.address);
@@ -279,6 +322,15 @@ export class Messenger {
   }
 
   private async ensureSession(peerAddress: string): Promise<Session> {
+    // Refuse to open a conversation with anyone but the paired peer, so a
+    // mistyped address cannot start a session with a stranger.
+    if (this.paired) {
+      const decision = decideOutbound(this.pairing, peerAddress);
+      if (!decision.allow) {
+        throw new Error(explainRefusal(decision.reason));
+      }
+    }
+
     const existing = this.sessions.get(peerAddress);
     if (existing) return existing;
 
@@ -476,6 +528,23 @@ export class Messenger {
       });
 
       const peerAddress = addressOf(result.senderIdentity);
+
+      // Pairing lock. This runs before the session is stored and before the
+      // payload is interpreted, so traffic from anyone but the paired peer
+      // never touches our ratchet state or our message store.
+      const decision = this.paired
+        ? decideInbound(
+            this.pairing,
+            peerAddress,
+            toBase64Url(result.senderIdentity.signingPublicKey),
+          )
+        : ({ allow: true } as const);
+      if (!decision.allow) {
+        this.options.events?.onBlocked?.(decision.reason, explainRefusal(decision.reason));
+        // Acknowledged so the relay stops redelivering, but otherwise discarded.
+        return { id: delivered.id, ok: false };
+      }
+
       this.sessions.set(peerAddress, result.session);
       // Record the sender before handling the payload: whoever writes to us
       // first must still be verifiable, which needs their identity on file.
@@ -740,6 +809,74 @@ export class Messenger {
     await this.conversations.delete(address);
     await this.sessionMeta.delete(address);
     this.sessions.delete(address);
+  }
+
+  // -------------------------------------------------------------------------
+  // Pairing (two-person mode)
+  // -------------------------------------------------------------------------
+
+  /** The paired peer, or undefined if this device is not paired yet. */
+  pairedPeer(): PairingState | undefined {
+    return this.pairing;
+  }
+
+  /**
+   * Pair with the one peer this device will ever talk to.
+   *
+   * Takes a verification code, not an address: the code carries the peer's
+   * full identity and a signature proving the keys belong together, so pairing
+   * does not depend on anything the relay says. Exchange codes in person - that
+   * is what makes the pin trustworthy, and it is the whole reason a two-person
+   * setup can be stronger than a general messenger.
+   */
+  async pairWithCode(code: string, displayName: string): Promise<PairingState> {
+    if (this.pairing) {
+      throw new Error(
+        'This device is already paired. Unpair first - doing so deletes the ' +
+          'conversation history, because a new pairing cannot decrypt it.',
+      );
+    }
+    const peerAddress = await this.addContactFromCode(code);
+    const contact = await this.contacts.get(peerAddress);
+    if (!contact) throw new Error('pairing failed: contact was not stored');
+
+    const pairing = createPairing({
+      peerAddress,
+      peerIdentityKey: contact.identityKey,
+      displayName,
+      now: this.now(),
+    });
+    await this.pairingStore.put('peer', pairing);
+    this.pairing = pairing;
+    return pairing;
+  }
+
+  /**
+   * Remove the pairing and everything tied to it.
+   *
+   * Deletes the conversation, because a fresh pairing derives different keys
+   * and could not read the old history anyway - leaving it would be ciphertext
+   * nobody can open. Deliberately destructive and deliberately explicit: this
+   * is the only path back from a changed key, and it should feel like a
+   * decision.
+   */
+  async unpair(): Promise<void> {
+    const existing = this.pairing;
+    if (existing) {
+      await this.deleteConversation(existing.peerAddress);
+      this.pinnedKeyCache.delete(existing.peerAddress);
+      await this.contacts.delete(existing.peerAddress);
+    }
+    await this.pairingStore.delete('peer');
+    this.pairing = undefined;
+  }
+
+  async renamePairedPeer(displayName: string): Promise<void> {
+    if (!this.pairing) return;
+    const updated: PairingState = { ...this.pairing, displayName };
+    await this.pairingStore.put('peer', updated);
+    this.pairing = updated;
+    await this.renameContact(updated.peerAddress, displayName);
   }
 
   /**

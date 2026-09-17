@@ -55,10 +55,22 @@ export interface TestUser {
   address: string;
 }
 
+/**
+ * Create a messenger against the relay.
+ *
+ * `mode` defaults to `'open'` here, not to the product default of `'paired'`,
+ * so the general multi-contact behaviour stays covered. Paired mode - which is
+ * what the shipped app uses - has its own suite in `pairing.test.ts`.
+ */
 export async function createUser(
   relay: Relay,
   name: string,
-  options: { events?: MessengerEvents; sendReceipts?: boolean; sendTypingIndicators?: boolean } = {},
+  options: {
+    events?: MessengerEvents;
+    sendReceipts?: boolean;
+    sendTypingIndicators?: boolean;
+    mode?: 'paired' | 'open';
+  } = {},
 ): Promise<TestUser> {
   const database = new InMemoryDatabase();
   const secrets = new InMemorySecretStore();
@@ -70,6 +82,7 @@ export async function createUser(
     secrets,
     database,
     vault,
+    mode: options.mode ?? 'open',
     ...(options.events ? { events: options.events } : {}),
     ...(options.sendReceipts !== undefined ? { sendReceipts: options.sendReceipts } : {}),
     ...(options.sendTypingIndicators !== undefined
@@ -79,6 +92,21 @@ export async function createUser(
 
   const { address } = await messenger.initialise();
   return { name, messenger, database, secrets, vault, address };
+}
+
+/**
+ * Two devices in the shipped configuration: paired mode, paired to each other
+ * by exchanging verification codes, as two people would do in person.
+ */
+export async function createPairedUsers(
+  relay: Relay,
+  options: { events?: MessengerEvents; sendReceipts?: boolean } = {},
+): Promise<{ alice: TestUser; bob: TestUser }> {
+  const alice = await createUser(relay, 'alice', { ...options, mode: 'paired' });
+  const bob = await createUser(relay, 'bob', { ...options, mode: 'paired' });
+  await alice.messenger.pairWithCode(bob.messenger.verificationCode(), 'Bob');
+  await bob.messenger.pairWithCode(alice.messenger.verificationCode(), 'Alice');
+  return { alice, bob };
 }
 
 export async function withRelay<T>(fn: (relay: Relay) => Promise<T>): Promise<T> {

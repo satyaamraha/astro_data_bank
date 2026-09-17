@@ -1,0 +1,108 @@
+# Veil relay for two people.
+#
+# Three containers:
+#   relay  - the store-and-forward server (holds only ciphertext)
+#   caddy  - TLS termination with an automatic Let's Encrypt certificate
+#   coturn - STUN/TURN, so calls connect through mobile NAT
+#
+# This runs comfortably on the smallest VPS you can rent. Two people generate
+# almost no load; the sizing constraint is bandwidth during calls, and only
+# when TURN has to relay them.
+#
+# What the machine running this can see, and what it cannot:
+#   CAN: that two addresses exchange messages, when, and how much; the IPs
+#        that connect; call IPs via TURN.
+#   CANNOT: message contents, call audio, who sent any given message (sealed
+#        sender), or anything in the message database (there isn't one - the
+#        relay holds queued ciphertext and deletes it on delivery).
+#
+# Because of that, "who runs the server" matters much less here than for a
+# normal messenger. Renting it under your own account is still the right call:
+# it removes the operator from the metadata picture entirely.
+
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8443
+      NODE_ENV: production
+    # No ports published. Only Caddy reaches it, over the internal network, so
+    # the relay is never directly exposed.
+    expose:
+      - '8443'
+    networks:
+      - veil
+    # The relay keeps queued messages in memory and is stateless across
+    # restarts by design: a restart drops undelivered ciphertext, which clients
+    # re-send. Nothing on disk means nothing to seize.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Two people cannot generate meaningful load; the cap is here to bound the
+    # damage from a flood rather than to size for traffic.
+    mem_limit: 512m
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '443:443'
+      - '80:80'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # Set this to your domain before starting. Caddy obtains and renews the
+      # certificate automatically.
+      VEIL_DOMAIN: ${VEIL_DOMAIN:?set VEIL_DOMAIN to your relay hostname}
+    networks:
+      - veil
+    depends_on:
+      - relay
+
+  coturn:
+    image: coturn/coturn:alpine
+    restart: unless-stopped
+    network_mode: host
+    # TURN needs a wide UDP range and the host's real addresses, which is why
+    # it runs on the host network rather than behind the bridge.
+    command:
+      - -n
+      - --listening-port=3478
+      - --tls-listening-port=5349
+      - --fingerprint
+      - --lt-cred-mech
+      - --realm=${VEIL_DOMAIN:?set VEIL_DOMAIN}
+      - --user=${TURN_USER:?set TURN_USER}:${TURN_PASSWORD:?set TURN_PASSWORD}
+      - --min-port=49160
+      - --max-port=49200
+      # Refuse to relay to private ranges. Without this an open TURN server can
+      # be used to probe the host's internal network.
+      - --denied-peer-ip=10.0.0.0-10.255.255.255
+      - --denied-peer-ip=172.16.0.0-172.31.255.255
+      - --denied-peer-ip=192.168.0.0-192.168.255.255
+      - --denied-peer-ip=169.254.0.0-169.254.255.255
+      - --denied-peer-ip=127.0.0.0-127.255.255.255
+      - --no-multicast-peers
+      # No logging. TURN logs would record the call metadata this design is
+      # meant to withhold, and there is nobody to read them.
+      - --no-stdout-log
+      - --syslog
+      - --no-cli
+
+networks:
+  veil:
+    driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:

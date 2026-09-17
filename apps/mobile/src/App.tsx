@@ -36,10 +36,20 @@ import { FetchTransport, WebSocketTransport } from './platform/transport.js';
 import { preventScreenCapture, startLifecycleLock } from './platform/screenSecurity.js';
 import { WebRtcMediaEngine, type IceConfiguration } from './platform/webrtc.js';
 import { Messenger } from './core/messenger.js';
+import {
+  canAttempt,
+  formatLockout,
+  lockoutRemainingMs,
+  parseAttemptState,
+  recordFailure,
+  recordSuccess,
+  serialiseAttemptState,
+} from './core/unlockPolicy.js';
 import { RelayClient } from './core/relayClient.js';
 import { CallManager } from './core/callManager.js';
 import type { CallInfo, Contact, Conversation, Message, Payload } from './core/types.js';
 import { OnboardingScreen } from './screens/OnboardingScreen.js';
+import { PairScreen } from './screens/PairScreen.js';
 import { ConversationsScreen, type ConversationRow } from './screens/ConversationsScreen.js';
 import { ChatScreen } from './screens/ChatScreen.js';
 import { VerifyScreen } from './screens/VerifyScreen.js';
@@ -49,6 +59,15 @@ import { NewConversationScreen } from './screens/NewConversationScreen.js';
 import { theme } from './ui/theme.js';
 
 const VAULT_KEY = 'veil.vault.wrapper';
+/**
+ * Failed-unlock counter.
+ *
+ * Deliberately in the keystore rather than the encrypted database: if it lived
+ * beside the data, an attacker could copy the database, burn attempts, restore
+ * the copy and reset the throttle. In the keystore, clearing app data destroys
+ * the vault too, which is no help to them.
+ */
+const ATTEMPTS_KEY = 'veil.unlock.attempts';
 
 /**
  * Deployment configuration.
@@ -69,6 +88,7 @@ type Route =
   | { readonly name: 'conversations' }
   | { readonly name: 'chat'; readonly address: string }
   | { readonly name: 'verify'; readonly address: string }
+  | { readonly name: 'pair' }
   | { readonly name: 'my-code' }
   | { readonly name: 'new-conversation' }
   | { readonly name: 'call' };
@@ -147,12 +167,37 @@ export function App({ config }: { config: AppConfig }) {
         const database = await SqliteDatabase.open();
 
         const storedWrapper = await secrets.get(VAULT_KEY);
+
+        // Argon2id makes each guess cost seconds, which defeats a fast offline
+        // attack. It does not stop someone with the phone grinding attempts by
+        // hand, so throttle those too.
+        let attempts = parseAttemptState(await secrets.get(ATTEMPTS_KEY), Date.now());
+        if (storedWrapper && !canAttempt(attempts, Date.now())) {
+          const wait = formatLockout(lockoutRemainingMs(attempts, Date.now()));
+          setError(`Too many incorrect attempts. Try again in ${wait}.`);
+          return;
+        }
+
         let vault: Vault;
         if (storedWrapper) {
-          vault = unlockVault(
-            utf8.encode(passphrase),
-            decodeWrappedVault(Buffer.from(storedWrapper, 'base64')),
-          );
+          try {
+            vault = unlockVault(
+              utf8.encode(passphrase),
+              decodeWrappedVault(Buffer.from(storedWrapper, 'base64')),
+            );
+          } catch (wrongPassphrase) {
+            attempts = recordFailure(attempts, Date.now());
+            await secrets.set(ATTEMPTS_KEY, serialiseAttemptState(attempts));
+            const remaining = lockoutRemainingMs(attempts, Date.now());
+            setError(
+              remaining > 0
+                ? `Incorrect passphrase. Try again in ${formatLockout(remaining)}.`
+                : 'Incorrect passphrase.',
+            );
+            void wrongPassphrase;
+            return;
+          }
+          await secrets.set(ATTEMPTS_KEY, serialiseAttemptState(recordSuccess()));
         } else {
           const created = createVault(utf8.encode(passphrase));
           vault = created.vault;
@@ -169,11 +214,20 @@ export function App({ config }: { config: AppConfig }) {
           secrets,
           database,
           vault,
+          // Explicit, though it is also the default: this app talks to exactly
+          // one paired peer and discards everything else.
+          mode: 'paired',
           events: {
             onMessage: () => void refreshLists(),
             onConversationChanged: () => void refreshLists(),
             onContactChanged: () => void refreshLists(),
             onIdentityChanged: () => void refreshLists(),
+            onBlocked: (reason, detail) => {
+              // A stranger being turned away is routine and stays quiet. A key
+              // change on the paired peer is either a reinstall or an
+              // interception attempt, and must be seen.
+              if (reason === 'key-changed') setError(detail);
+            },
             onCallPayload: (peerAddress, payload) => {
               void (async () => {
                 await warmPeerIdentity(peerAddress);
@@ -232,7 +286,13 @@ export function App({ config }: { config: AppConfig }) {
 
         await messenger.sync();
         await refreshLists();
-        setRoute({ name: 'conversations' });
+        // A device with no pairing has nobody to talk to yet, so pairing is
+        // the only sensible destination.
+        setRoute(
+          messenger.pairedPeer() === undefined
+            ? { name: 'pair' }
+            : { name: 'conversations' },
+        );
       } catch (caught) {
         setError((caught as Error).message);
       } finally {
@@ -455,6 +515,41 @@ export function App({ config }: { config: AppConfig }) {
     );
   }
 
+  if (route.name === 'pair') {
+    return (
+      <>
+        <StatusBar style="light" />
+        <PairScreen
+          myCode={messengerRef.current?.verificationCode() ?? ''}
+          busy={busy}
+          {...(error !== undefined ? { error } : {})}
+          onShareCode={() => {
+            const code = messengerRef.current?.verificationCode();
+            if (code !== undefined) void Share.share({ message: code });
+          }}
+          onPair={(theirCode, displayName) => {
+            void (async () => {
+              const messenger = messengerRef.current;
+              if (!messenger) return;
+              setBusy(true);
+              setError(undefined);
+              try {
+                const peer = await messenger.pairWithCode(theirCode, displayName);
+                await warmPeerIdentity(peer.peerAddress);
+                await refreshLists();
+                setRoute({ name: 'conversations' });
+              } catch (caught) {
+                setError((caught as Error).message);
+              } finally {
+                setBusy(false);
+              }
+            })();
+          }}
+        />
+      </>
+    );
+  }
+
   if (route.name === 'my-code') {
     return (
       <>
@@ -513,8 +608,14 @@ export function App({ config }: { config: AppConfig }) {
         myAddress={myAddress}
         onOpen={(address) => void openChat(address)}
         onNewConversation={() => {
+          // In paired mode there is exactly one correspondent, so this opens
+          // the pairing screen rather than a contact picker.
           setError(undefined);
-          setRoute({ name: 'new-conversation' });
+          setRoute(
+            messengerRef.current?.pairedPeer() === undefined
+              ? { name: 'pair' }
+              : { name: 'my-code' },
+          );
         }}
         onShowMyCode={() => setRoute({ name: 'my-code' })}
       />

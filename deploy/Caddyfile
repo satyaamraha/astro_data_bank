@@ -1,0 +1,41 @@
+# TLS termination for the Veil relay.
+#
+# Caddy obtains and renews a Let's Encrypt certificate automatically, so the
+# relay itself never handles a private key.
+#
+# Note what TLS is and is not doing here. Messages are already end-to-end
+# encrypted before they reach this layer, so TLS is not what protects their
+# contents. It protects the *metadata* - which addresses are being fetched,
+# which are receiving - and the registration exchange, from anyone watching
+# the network between the phone and this server.
+
+{$VEIL_DOMAIN} {
+	# Modern TLS only. Older versions exist for compatibility with clients we
+	# do not have.
+	tls {
+		protocols tls1.3
+	}
+
+	# The relay speaks plain HTTP on the internal network only.
+	reverse_proxy relay:8443 {
+		# WebSocket upgrade for realtime delivery.
+		header_up Host {upstream_hostport}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		# There is no web UI; nothing should ever be rendered from this origin.
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		-Server
+	}
+
+	# No access log. An access log here would record, per request, the IP and
+	# the recipient address being fetched - reconstructing exactly the delivery
+	# metadata the relay is built not to keep.
+	log {
+		output discard
+	}
+}

@@ -5,7 +5,7 @@ that is built so it cannot read what it carries, cannot tell who sent a message,
 and holds no personal identifier for anyone.
 
 > **Status: not audited.** This is a careful implementation of well-specified
-> constructions with 254 tests covering its security claims. That is not the
+> constructions with 283 tests covering its security claims. That is not the
 > same as an independent audit. Do not deploy it for people whose safety depends
 > on it until it has had one. See [docs/SECURITY.md](docs/SECURITY.md).
 
@@ -51,6 +51,16 @@ Veil shows a 60-digit safety number for each conversation and four spoken words
 during each call; if they match, nobody is in the middle. Verification state is
 visible on every conversation row, not buried in a menu.
 
+**Paired mode is the default: one peer, established in person.** The hardest
+problem in an encrypted messenger is knowing the key belongs to the person you
+think, and a general messenger cannot solve it — it has to let you message
+strangers. Two people can: you pair once face to face with a code carrying each
+other's signed identity, nothing the relay says is trusted, and afterwards
+traffic from any other account is discarded *before decryption*. A key change is
+a hard stop rather than a dismissable warning, because unlike a general
+messenger there is no innocent "they reinstalled and I'm not with them" case
+worth tolerating. See [docs/TWO_PERSON_SETUP.md](docs/TWO_PERSON_SETUP.md).
+
 **Adding a contact by code starts the conversation already verified.** A
 verification code carries the full identity plus a signature proving the keys
 belong together, so pasting one is stronger than reading digits aloud — it
@@ -83,10 +93,12 @@ leak behaviour), and no contacts, location, or camera permissions.
 packages/crypto      The cryptographic core. Platform-independent, 108 tests.
 packages/protocol    Wire types shared by client and relay.
 packages/relay       The store-and-forward server. 54 tests.
-apps/mobile          React Native (Expo) app. 92 tests (core logic + Android build config).
+apps/mobile          React Native (Expo) app. 121 tests (core logic, pairing, Android build config).
   src/core           Messenger, relay client, call manager - testable in Node.
   src/platform       Keystore, SQLite, WebRTC, transports.
   src/screens        UI.
+deploy/              Docker Compose relay: TLS, TURN, no logs anywhere.
+docs/TWO_PERSON_SETUP.md  Runbook for the two-person configuration.
 docs/SECURITY.md     Threat model, and an explicit list of what is not protected.
 docs/ASSESSMENT.md   Security audit, including the defects it found and fixed.
 docs/COMPARISON.md   How this differs from WhatsApp and Instagram, fairly.
@@ -111,7 +123,7 @@ Requires Node 20 or newer.
 npm install
 npm run build          # build the workspace packages
 npm run typecheck      # strict typecheck, all packages
-npm test               # 254 tests
+npm test               # 283 tests
 ```
 
 ### The relay
@@ -193,7 +205,7 @@ regenerates the manifest, and nobody notices until an audit.
 ## Testing approach
 
 The tests assert the security properties, not just the happy path. Among the
-254:
+283:
 
 - key substitution, prekey downgrade, and forged-bundle rejection
 - forged sender identities and rewritten routing fields
