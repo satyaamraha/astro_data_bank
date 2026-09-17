@@ -1,0 +1,23 @@
+{
+  "name": "@veil/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Veil mobile app: private messaging and encrypted voice",
+  "main": "index.js",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios"
+  },
+  "dependencies": {
+    "@veil/crypto": "0.1.0",
+    "@veil/protocol": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.1"
+  }
+}

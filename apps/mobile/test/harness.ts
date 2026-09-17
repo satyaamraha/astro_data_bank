@@ -1,0 +1,91 @@
+/**
+ * App-core test harness.
+ *
+ * Wires the real Messenger to the real relay through an in-process transport,
+ * so these tests exercise the actual client/server path: registration,
+ * challenge-response login, bundle verification, sealed sending, and sync.
+ * Nothing here is a mock of Veil's own logic — only the network hop is
+ * short-circuited.
+ */
+
+import { createVault, utf8, type Vault } from '@veil/crypto';
+import { buildRelay, type Relay } from '../../../packages/relay/src/index.js';
+import { Messenger, type MessengerEvents } from '../src/core/messenger.js';
+import { RelayClient, type HttpResponse, type Transport } from '../src/core/relayClient.js';
+import {
+  InMemoryDatabase,
+  InMemorySecretStore,
+} from '../src/core/storage.js';
+
+/** Transport that calls Fastify's inject instead of opening a socket. */
+export class InjectTransport implements Transport {
+  constructor(private readonly relay: Relay) {}
+
+  async request(options: {
+    method: 'GET' | 'POST';
+    path: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+  }): Promise<HttpResponse> {
+    const response = await this.relay.app.inject({
+      method: options.method,
+      url: options.path,
+      ...(options.body !== undefined ? { payload: options.body as object } : {}),
+      ...(options.headers ? { headers: options.headers } : {}),
+    });
+    return {
+      status: response.statusCode,
+      json: async () => {
+        try {
+          return response.json();
+        } catch {
+          return {};
+        }
+      },
+    };
+  }
+}
+
+export interface TestUser {
+  readonly name: string;
+  readonly messenger: Messenger;
+  readonly database: InMemoryDatabase;
+  readonly secrets: InMemorySecretStore;
+  readonly vault: Vault;
+  address: string;
+}
+
+export async function createUser(
+  relay: Relay,
+  name: string,
+  options: { events?: MessengerEvents; sendReceipts?: boolean; sendTypingIndicators?: boolean } = {},
+): Promise<TestUser> {
+  const database = new InMemoryDatabase();
+  const secrets = new InMemorySecretStore();
+  const { vault } = createVault(utf8.encode(`${name}-passphrase`));
+  const client = new RelayClient(new InjectTransport(relay));
+
+  const messenger = new Messenger({
+    relay: client,
+    secrets,
+    database,
+    vault,
+    ...(options.events ? { events: options.events } : {}),
+    ...(options.sendReceipts !== undefined ? { sendReceipts: options.sendReceipts } : {}),
+    ...(options.sendTypingIndicators !== undefined
+      ? { sendTypingIndicators: options.sendTypingIndicators }
+      : {}),
+  });
+
+  const { address } = await messenger.initialise();
+  return { name, messenger, database, secrets, vault, address };
+}
+
+export async function withRelay<T>(fn: (relay: Relay) => Promise<T>): Promise<T> {
+  const relay = await buildRelay({ disableTimers: true });
+  try {
+    return await fn(relay);
+  } finally {
+    await relay.close();
+  }
+}
