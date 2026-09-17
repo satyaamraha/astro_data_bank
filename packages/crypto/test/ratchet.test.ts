@@ -135,6 +135,61 @@ describe('double ratchet', () => {
     expect(bobSession.ratchet.skipped.size).toBeLessThanOrEqual(MAX_SKIPPED_KEYS);
   });
 
+  it('survives an injected degenerate ratchet key without corrupting state', () => {
+    // A header is attacker-controlled, and X25519 rejects low-order public
+    // keys. If that rejection landed after the ratchet counters were reset, one
+    // injected frame would permanently desynchronise the session. Assert the
+    // conversation still works afterwards, in both directions.
+    const { alice, bob } = connectedPair();
+    const bobSession = bob.sessions.get(alice.address)!;
+
+    const sentBefore = bobSession.ratchet.sentCount;
+    const receivedBefore = bobSession.ratchet.receivedCount;
+
+    // All-zero is a canonical low-order X25519 point: agreement must fail.
+    const degenerate = {
+      header: {
+        ratchetPublicKey: new Uint8Array(32),
+        previousChainLength: 0,
+        messageNumber: 0,
+      },
+      ciphertext: new Uint8Array(64),
+    };
+    expect(() => ratchetDecrypt(bobSession.ratchet, degenerate)).toThrow();
+
+    // Counters untouched, so the session was never half-advanced.
+    expect(bobSession.ratchet.sentCount).toBe(sentBefore);
+    expect(bobSession.ratchet.receivedCount).toBe(receivedBefore);
+
+    // And the conversation continues normally in both directions.
+    expect(bob.receiveText(alice.send(bob.address, 'still working'))).toBe('still working');
+    expect(alice.receiveText(bob.send(alice.address, 'both ways'))).toBe('both ways');
+  });
+
+  it('survives an injected oversized skip claim without corrupting state', () => {
+    const { alice, bob } = connectedPair();
+    const bobSession = bob.sessions.get(alice.address)!;
+    const aliceSession = alice.sessions.get(bob.address)!;
+
+    const sentBefore = bobSession.ratchet.sentCount;
+
+    // A real ratchet key (so agreement succeeds) but an absurd previous-chain
+    // length, which must be refused by the skip bound.
+    const message = ratchetEncrypt(aliceSession.ratchet, text.encode('x'));
+    expect(() =>
+      ratchetDecrypt(bobSession.ratchet, {
+        header: {
+          ...message.header,
+          previousChainLength: MAX_SKIP_PER_CHAIN + 10_000,
+        },
+        ciphertext: message.ciphertext,
+      }),
+    ).toThrow(SessionStateError);
+
+    expect(bobSession.ratchet.sentCount).toBe(sentBefore);
+    expect(bob.receiveText(alice.send(bob.address, 'unaffected'))).toBe('unaffected');
+  });
+
   it('does not leak plaintext into the ciphertext', () => {
     const { alice, bob } = connectedPair();
     const secret = 'attack at dawn, meet by the bridge';

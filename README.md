@@ -5,7 +5,7 @@ that is built so it cannot read what it carries, cannot tell who sent a message,
 and holds no personal identifier for anyone.
 
 > **Status: not audited.** This is a careful implementation of well-specified
-> constructions with 209 tests covering its security claims. That is not the
+> constructions with 211 tests covering its security claims. That is not the
 > same as an independent audit. Do not deploy it for people whose safety depends
 > on it until it has had one. See [docs/SECURITY.md](docs/SECURITY.md).
 
@@ -72,7 +72,7 @@ leak behaviour), and no contacts, location, or camera permissions.
 ## Layout
 
 ```
-packages/crypto      The cryptographic core. Platform-independent, 105 tests.
+packages/crypto      The cryptographic core. Platform-independent, 107 tests.
 packages/protocol    Wire types shared by client and relay.
 packages/relay       The store-and-forward server. 54 tests.
 apps/mobile          React Native (Expo) app. 50 core tests.
@@ -101,7 +101,7 @@ Requires Node 20 or newer.
 npm install
 npm run build          # build the workspace packages
 npm run typecheck      # strict typecheck, all packages
-npm test               # 209 tests
+npm test               # 211 tests
 ```
 
 ### The relay
@@ -138,7 +138,7 @@ still cannot hear the call — at the cost of latency.
 ## Testing approach
 
 The tests assert the security properties, not just the happy path. Among the
-209:
+211:
 
 - key substitution, prekey downgrade, and forged-bundle rejection
 - forged sender identities and rewritten routing fields

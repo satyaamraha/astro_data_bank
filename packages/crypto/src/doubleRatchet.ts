@@ -335,31 +335,48 @@ function skipReceivingKeys(state: RatchetState, until: number): void {
 
 /** DH ratchet step: the peer moved to a new ratchet key, so re-key both chains. */
 function performDhRatchet(state: RatchetState, header: RatchetHeader): void {
-  // Close out the old receiving chain first so late messages stay decryptable.
-  skipReceivingKeys(state, header.previousChainLength);
+  // Everything that can fail runs before anything is mutated.
+  //
+  // `dh` rejects degenerate peer public keys, and the header is attacker
+  // controlled. If that throw landed after the counters had been reset, a
+  // single injected frame would leave the session with clobbered send/receive
+  // counters and no way back - the peer would stop being able to decrypt us.
+  // So the agreement happens first, on a copy of nothing, and state is only
+  // touched once it has succeeded.
+  const receivingDh = dh(state.sending.secretKey, header.ratchetPublicKey);
+
+  // Close out the old receiving chain so late messages from it stay
+  // decryptable. This checks its own skip bound before advancing anything.
+  try {
+    skipReceivingKeys(state, header.previousChainLength);
+  } catch (error) {
+    wipe(receivingDh);
+    throw error;
+  }
 
   state.previousSentCount = state.sentCount;
   state.sentCount = 0;
   state.receivedCount = 0;
   state.receiving = header.ratchetPublicKey;
 
-  // Receiving chain from the peer's new key and our current key.
+  // Receiving chain, from the peer's new key and our current key.
   {
-    const dhOutput = dh(state.sending.secretKey, header.ratchetPublicKey);
-    const { rootKey, chainKey } = advanceRootChain(state.rootKey, dhOutput);
-    wipe(dhOutput, state.rootKey, state.receivingChainKey);
+    const { rootKey, chainKey } = advanceRootChain(state.rootKey, receivingDh);
+    wipe(receivingDh, state.rootKey, state.receivingChainKey);
     state.rootKey = rootKey;
     state.receivingChainKey = chainKey;
   }
 
   // Then a brand-new sending key, so our next reply gives the peer fresh
   // entropy too. This is the step that delivers post-compromise security.
+  // The peer key is already proven non-degenerate by the agreement above, so
+  // this one cannot fail.
   {
     wipe(state.sending.secretKey);
     state.sending = generateDhKeyPair();
-    const dhOutput = dh(state.sending.secretKey, header.ratchetPublicKey);
-    const { rootKey, chainKey } = advanceRootChain(state.rootKey, dhOutput);
-    wipe(dhOutput, state.rootKey, state.sendingChainKey);
+    const sendingDh = dh(state.sending.secretKey, header.ratchetPublicKey);
+    const { rootKey, chainKey } = advanceRootChain(state.rootKey, sendingDh);
+    wipe(sendingDh, state.rootKey, state.sendingChainKey);
     state.rootKey = rootKey;
     state.sendingChainKey = chainKey;
   }

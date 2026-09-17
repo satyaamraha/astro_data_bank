@@ -166,7 +166,7 @@ undecryptable.
 
 ### 3.9 This code has not been independently audited
 
-It is a careful implementation of well-specified constructions with 209 tests
+It is a careful implementation of well-specified constructions with 211 tests
 covering the security claims, including negative tests for key substitution,
 forged senders, replays, tampering, and resource exhaustion. That is not the
 same as an audit. Do not deploy it for people whose safety depends on it without
